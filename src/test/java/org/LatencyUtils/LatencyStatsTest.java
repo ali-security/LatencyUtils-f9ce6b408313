@@ -10,6 +10,7 @@ import org.junit.Assert;
 import org.junit.Test;
 
 import java.lang.reflect.Field;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -311,6 +312,64 @@ public class LatencyStatsTest {
 
         } catch (InterruptedException ex) {
             //Suppress
+        } finally {
+            latencyStats.stop();
+            pauseDetector.shutdown();
+        }
+    }
+
+    @Test
+    public void testPauseLongerThanHighestTrackableLatency() throws Exception {
+        final long highestTrackableLatency = 100 * MSEC;
+        final int recordedLatencyCount = 64;
+
+        // A pause detector whose pauses are injected directly by the test (notifyListeners is
+        // protected, and so accessible from this package):
+        PauseDetector pauseDetector = new PauseDetector() {};
+
+        LatencyStats latencyStats = new LatencyStats.Builder()
+                .lowestTrackableLatency(1000L)
+                .highestTrackableLatency(highestTrackableLatency)
+                .numberOfSignificantValueDigits(numberOfSignificantValueDigits)
+                .intervalEstimatorWindowLength(16)
+                .intervalEstimatorTimeCap(10000 * MSEC)
+                .pauseDetector(pauseDetector)
+                .build();
+
+        final CountDownLatch pauseDelivered = new CountDownLatch(1);
+        PauseDetectorListener deliveryProbe = new PauseDetectorListener() {
+            public void handlePauseEvent(final long pauseLength, final long pauseEndTime) {
+                pauseDelivered.countDown();
+            }
+        };
+
+        try {
+            // Fill the interval estimator window so that it produces a finite interval estimate:
+            for (int i = 0; i < recordedLatencyCount; i++) {
+                latencyStats.recordLatency(1 * MSEC);
+            }
+
+            // A pause 10x longer than the highest trackable latency, ending 1 msec after the last recording:
+            long pauseLength = 10 * highestTrackableLatency;
+            long pauseEndTime = TimeServices.nanoTime() + (1 * MSEC);
+
+            // Listeners are notified in registration order, so the probe only sees the pause after
+            // the LatencyStats instance has finished recording its pause corrections:
+            pauseDetector.addListener(deliveryProbe);
+            pauseDetector.notifyListeners(pauseLength, pauseEndTime);
+
+            Assert.assertTrue("Pause longer than highestTrackableLatency was not delivered past LatencyStats",
+                    pauseDelivered.await(10, TimeUnit.SECONDS));
+
+            Histogram intervalHistogram = latencyStats.getIntervalHistogram();
+
+            System.out.println("Over-range pause interval histogram: max = " + intervalHistogram.getMaxValue() +
+                    ", count = " + intervalHistogram.getTotalCount());
+
+            Assert.assertTrue("Pause corrections should have been recorded for the over-range pause",
+                    intervalHistogram.getTotalCount() > recordedLatencyCount);
+            Assert.assertTrue("Pause corrections should be clamped to highestTrackableLatency",
+                    intervalHistogram.valuesAreEquivalent(intervalHistogram.getMaxValue(), highestTrackableLatency));
         } finally {
             latencyStats.stop();
             pauseDetector.shutdown();

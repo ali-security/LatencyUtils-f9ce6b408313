@@ -111,6 +111,8 @@ public abstract class PauseDetector {
                         throw new RuntimeException("Unexpected message type received: " + message);
                     }
                 } catch (InterruptedException ex) {
+                } catch (Throwable t) {
+                    t.printStackTrace(System.err);
                 }
             }
         }

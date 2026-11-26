@@ -401,9 +401,10 @@ public class LatencyStats {
         try {
             long estimatedInterval = intervalEstimator.getEstimatedInterval(pauseEndTime);
             long observedLatencyMinbar = pauseLength - estimatedInterval;
-            if (observedLatencyMinbar >= estimatedInterval) {
+            long recordable = Math.min(observedLatencyMinbar, highestTrackableLatency);
+            if (recordable >= estimatedInterval) {
                 activePauseCorrectionsHistogram.recordValueWithExpectedInterval(
-                        observedLatencyMinbar,
+                        recordable,
                         estimatedInterval
                 );
             }
